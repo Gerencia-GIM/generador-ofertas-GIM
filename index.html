@@ -4614,7 +4614,9 @@ async function generarDocMT(){
     const marcaEqG=(eq.marca||mtMarcaSel||'SCHNEIDER').toUpperCase();
     const mKey=marcaEqG==='SCHNEIDER'?'SCHNEIDER':marcaEqG==='ABB'?'ABB':marcaEqG==='SIEMENS'?'SIEMENS':marcaEqG==='EATON'?'EATON':'VARIOS';
     const margenG=(cfg&&cfg.margenes&&cfg.margenes[mKey])||0.8;
-    const costoG=(eq.precio||0)*(1-(eq.dto||0)/100);
+    const costoEqG=(eq.precio||0)*(1-(eq.dto||0)/100);
+    const costoSubG=(eq.subitems||[]).reduce((s,si)=>s+(si.precio||0)*(si.cant||1),0);
+    const costoG=costoEqG+costoSubG;
     const vUnit=margenG>0?costoG/margenG:costoG;
     const cant=eq.cant||1;
     const tot=vUnit*cant;
@@ -5140,6 +5142,14 @@ function recolectarMT(){
     var n = parseFloat((inp.dataset.raw||inp.value||'0').toString().replace(/[^0-9.]/g,''))||0;
     if(!isNaN(i)) mtSetItem(i,'precio',n);
   });
+  // Sincronizar precios de sub-ítems
+  document.querySelectorAll('#mt-tabla-equipos input[data-si]').forEach(function(inp){
+    if(inp.dataset.f !== 'precio') return;
+    var i = parseInt(inp.dataset.i), si = parseInt(inp.dataset.si);
+    var n = parseFloat((inp.dataset.raw||inp.value||'0').toString().replace(/[^0-9.]/g,''))||0;
+    var eq = mtGetItem(i);
+    if(eq && eq.subitems && eq.subitems[si]) eq.subitems[si].precio = n;
+  });
   return {
     mtEquipos:  mtEquipos,
     mtAccItems: mtAccItems,
@@ -5581,13 +5591,25 @@ function mtActualizarPreview(){
   h+='<strong>Ref:</strong> '+(d.p_ref||d.p_proyecto||'')+'<br><strong>Oferta:</strong> '+(d.p_num||'')+(d.p_act?' ACT '+d.p_act:'')+'<br><br>';
   h+='<strong>1. ALCANCE TÉCNICO</strong><br><br>';
   var sub=0;
-  itemsSeleccionados.forEach(function(it,i){
-    var t=it.precio*it.cant*(1-(it.dto||0)/100);sub+=t;
-    h+='<strong>'+(i+1)+'. '+it.desc+'</strong> ('+it.cant+' und.) — '+fmtCOP(t)+'<br>';
-    it.descLarga.split(';').map(function(l){return l.trim();}).filter(Boolean).forEach(function(l){h+='&nbsp;&nbsp;· '+l+'<br>';});
+  var todosItems = mtEquipos.concat(mtAccItems).concat(mtOtros);
+  todosItems.forEach(function(it,i){
+    var mk=(it.marca||'').toUpperCase()||'VARIOS';
+    var mKey=mk==='SCHNEIDER'?'SCHNEIDER':mk==='ABB'?'ABB':mk==='SIEMENS'?'SIEMENS':mk==='EATON'?'EATON':'VARIOS';
+    var margen=(cfg&&cfg.margenes&&cfg.margenes[mKey])||0.8;
+    var costoEq=(it.precio||0)*(1-(it.dto||0)/100);
+    var costoSub=(it.subitems||[]).reduce(function(s,si){return s+(si.precio||0)*(si.cant||1);},0);
+    var vUnit=margen>0?(costoEq+costoSub)/margen:(costoEq+costoSub);
+    var t=vUnit*(it.cant||1);
+    sub+=t;
+    h+='<strong>'+(i+1)+'. '+(it.desc||it.ref||'')+'</strong> ('+(it.cant||1)+' und.) — '+fmtCOP(t)+'<br>';
+    if(it.subitems&&it.subitems.length){
+      it.subitems.forEach(function(si){
+        if(si.desc) h+='&nbsp;&nbsp;↳ [interno] '+(si.ref?si.ref+' — ':'')+si.desc+' ('+fmtCOP((si.precio||0)*(si.cant||1))+')<br>';
+      });
+    }
+    if(it.descLarga)(it.descLarga.split(';').map(function(l){return l.trim();}).filter(Boolean).forEach(function(l){h+='&nbsp;&nbsp;· '+l+'<br>';}));
     h+='<br>';
   });
-  sub+=mtGetChkTotal()+mtGetLibTotal();
   h+='<strong>SUBTOTAL: '+fmtCOP(sub)+'</strong><br>IVA 19%: '+fmtCOP(sub*0.19)+'<br><strong>TOTAL: '+fmtCOP(sub*1.19)+'</strong>';
   document.getElementById('mt-preview-box').innerHTML=h;
 }
@@ -5761,7 +5783,12 @@ function mtRenderEquipos() {
     var mk = (eq.marca||'').toUpperCase() || 'VARIOS';
     var mKey = mk==='SCHNEIDER'?'SCHNEIDER':mk==='ABB'?'ABB':mk==='SIEMENS'?'SIEMENS':mk==='EATON'?'EATON':'VARIOS';
     var margen = (cfg&&cfg.margenes&&cfg.margenes[mKey]) || 0.8;
-    var costo = (eq.precio||0) * (1-(eq.dto||0)/100);
+    var costoEq = (eq.precio||0) * (1-(eq.dto||0)/100);
+    // Sumar costo de sub-ítems internos (también aplica margen)
+    var costoSub = (eq.subitems||[]).reduce(function(s,sub){
+      return s + (sub.precio||0)*(sub.cant||1);
+    }, 0);
+    var costo = costoEq + costoSub;
     var vUnit = margen > 0 ? costo/margen : costo;
     var pTotal = vUnit * (parseInt(eq.cant)||1);
     var esS = (eq.marca||'').toUpperCase() === 'SCHNEIDER';
@@ -5777,8 +5804,29 @@ function mtRenderEquipos() {
     // V/Unit: precio lista con formato, siempre editable
     h.push('<td style="text-align:right">'+mtPrecioInput(globalIdx, eq.precio, eq.dto, vUnit, mKey)+'</td>');
     h.push('<td style="text-align:right;font-size:13px;font-weight:700;color:#1a56db">'+(pTotal>0?fmtCOP(pTotal):'—')+'</td>');
-    h.push('<td style="text-align:center;white-space:nowrap">'+schBtn+'<button data-i="'+globalIdx+'" onclick="mtQuitarItem(+this.dataset.i)" title="Eliminar" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:16px;padding:0 3px;line-height:1">&times;</button></td>');
+    // Botón interno + eliminar
+    var nSub = (eq.subitems||[]).length;
+    var subExp = !!(window._mtSubExpanded && window._mtSubExpanded[globalIdx]);
+    var btnInt = '<button data-i="'+globalIdx+'" onclick="mtToggleSubitems(+this.dataset.i)" title="Items internos GIM" style="background:none;border:1px solid #f59e0b;color:#b45309;border-radius:4px;padding:1px 5px;font-size:10px;cursor:pointer;margin-right:3px">'+(subExp?'▲':'▼')+' '+(nSub>0?nSub+' int.':'int.')+'</button>';
+    h.push('<td style="text-align:center;white-space:nowrap">'+btnInt+schBtn+'<button data-i="'+globalIdx+'" onclick="mtQuitarItem(+this.dataset.i)" title="Eliminar" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:16px;padding:0 3px;line-height:1">&times;</button></td>');
     h.push('</tr>');
+
+    // Sub-ítems expandidos
+    if(subExp){
+      (eq.subitems||[]).forEach(function(sub,si){
+        h.push('<tr class="sub-interno">');
+        h.push('<td style="text-align:center;font-size:12px;color:#d97706">↳</td>');
+        h.push('<td><input value="'+esc(sub.ref||'')+'" placeholder="Ref. interna" data-i="'+globalIdx+'" data-si="'+si+'" data-f="ref" oninput="mtSetSubitem(+this.dataset.i,+this.dataset.si,this.dataset.f,this.value)" style="width:100%;font-size:10px;font-family:monospace;background:transparent;border:none;color:#b45309;outline:none;border-bottom:1px dashed #f59e0b"/></td>');
+        h.push('<td><input value="'+esc(sub.desc||'')+'" placeholder="Descripción interna..." data-i="'+globalIdx+'" data-si="'+si+'" data-f="desc" oninput="mtSetSubitem(+this.dataset.i,+this.dataset.si,this.dataset.f,this.value)" style="width:100%;font-size:11px;background:transparent;border:none;color:#92400e;outline:none;border-bottom:1px dashed #f59e0b"/></td>');
+        h.push('<td style="text-align:center"><input type="number" value="'+(sub.cant||1)+'" min="1" data-i="'+globalIdx+'" data-si="'+si+'" data-f="cant" onchange="mtSetSubitem(+this.dataset.i,+this.dataset.si,this.dataset.f,this.value)" style="width:44px;text-align:center;font-size:11px;border:1px solid #fcd34d;border-radius:3px;padding:1px 2px;background:#fffbeb"/></td>');
+        h.push('<td></td>');
+        h.push('<td style="text-align:right">'+mtPrecioSubitem(globalIdx,si,sub.precio||0)+'</td>');
+        h.push('<td style="text-align:right;font-size:11px;color:#92400e;font-weight:600">'+(sub.precio>0?fmtCOP((sub.precio||0)*(sub.cant||1)):'')+'</td>');
+        h.push('<td style="text-align:center"><button data-i="'+globalIdx+'" data-si="'+si+'" onclick="mtQuitarSubitem(+this.dataset.i,+this.dataset.si)" style="background:none;border:none;color:#f59e0b;cursor:pointer;font-size:14px;padding:0 2px">&times;</button></td>');
+        h.push('</tr>');
+      });
+      h.push('<tr class="sub-interno"><td></td><td colspan="6" style="padding:4px 8px"><button data-i="'+globalIdx+'" onclick="mtAgregarSubitem(+this.dataset.i)" style="background:#fef3c7;border:1px dashed #f59e0b;color:#92400e;border-radius:4px;padding:3px 12px;font-size:11px;cursor:pointer">+ Agregar ítem interno</button></td><td></td></tr>');
+    }
   }
 
   // ── GRUPO 1: Equipos del proveedor ───────────────────────────────────
@@ -5817,6 +5865,64 @@ function mtRenderEquipos() {
   mtActualizarFooter();
 }
 
+// ── Sub-ítems internos ───────────────────────────────────────────────────
+if(!window._mtSubExpanded) window._mtSubExpanded = {};
+
+function mtGetItem(i){
+  if(i < mtEquipos.length) return mtEquipos[i];
+  if(i < mtEquipos.length+mtAccItems.length) return mtAccItems[i-mtEquipos.length];
+  return mtOtros[i-mtEquipos.length-mtAccItems.length];
+}
+
+function mtToggleSubitems(i){
+  window._mtSubExpanded[i] = !window._mtSubExpanded[i];
+  mtRenderEquipos();
+}
+
+function mtAgregarSubitem(i){
+  var eq = mtGetItem(i);
+  if(!eq) return;
+  if(!eq.subitems) eq.subitems = [];
+  eq.subitems.push({desc:'',cant:1,precio:0});
+  window._mtSubExpanded[i] = true;
+  mtRenderEquipos();
+  setTimeout(function(){
+    var rows = document.querySelectorAll('#mt-tabla-equipos tr.sub-interno');
+    if(rows.length){ var inp=rows[rows.length-2].querySelector('input'); if(inp) inp.focus(); }
+  }, 50);
+}
+
+function mtSetSubitem(i,si,f,v){
+  var eq = mtGetItem(i);
+  if(!eq||!eq.subitems||!eq.subitems[si]) return;
+  if(f==='cant'){ eq.subitems[si].cant=parseInt(v)||1; setTimeout(mtRenderEquipos,0); return; }
+  else if(f==='precio'){ eq.subitems[si].precio=parseFloat(v)||0; setTimeout(mtRenderEquipos,0); return; }
+  else eq.subitems[si][f]=v;
+  mtActualizarFooter();
+}
+
+function mtQuitarSubitem(i,si){
+  var eq = mtGetItem(i);
+  if(!eq||!eq.subitems) return;
+  eq.subitems.splice(si,1);
+  mtRenderEquipos();
+}
+
+function mtPrecioSubitem(idx, si, precio){
+  if(!window._mtSubPrecioRaw) window._mtSubPrecioRaw={};
+  window._mtSubPrecioRaw[idx+'_'+si] = precio||0;
+  var fmt = precio>0 ? fmtCOP(precio) : '';
+  return '<input type="text"'
+    +' value="'+fmt+'"'
+    +' placeholder="$ costo"'
+    +' data-i="'+idx+'"'
+    +' data-si="'+si+'"'
+    +' data-raw="'+(precio||0)+'"'
+    +' onfocus="this.value=this.dataset.raw>0?this.dataset.raw+\'\':this.value;"'
+    +' onblur="var n=parseFloat(this.value.replace(/[^0-9.]/g,\'\'))||0;this.dataset.raw=n;this.value=n>0?fmtCOP(n):\'\';mtSetSubitem(+this.dataset.i,+this.dataset.si,\'precio\',n);"'
+    +' style="width:110px;text-align:right;font-size:11px;border:1px solid #fcd34d;border-radius:4px;padding:2px 6px;background:#fffbeb;color:#92400e"/>';
+}
+
 function mtSetItem(i,f,v){
   var arr, localI;
   if(i < mtEquipos.length){ arr=mtEquipos; localI=i; }
@@ -5836,8 +5942,8 @@ function mtQuitarItem(i){
   mtRenderEquipos();
 }
 function mtAddManual(target){
-  if(target==='acc') mtAccItems.push({ref:'',desc:'',cant:1,precio:0,dto:0,volt:'',marca:'VARIOS'});
-  else mtEquipos.push({ref:'',desc:'',cant:1,precio:0,dto:0,volt:'',marca:mtMarcaSel||''});
+  if(target==='acc') mtAccItems.push({ref:'',desc:'',cant:1,precio:0,dto:0,volt:'',marca:'VARIOS',subitems:[]});
+  else mtEquipos.push({ref:'',desc:'',cant:1,precio:0,dto:0,volt:'',marca:mtMarcaSel||'',subitems:[]});
   mtRenderEquipos();
   setTimeout(function(){
     var rows=document.querySelectorAll('#mt-tabla-equipos tr.eq-fila');
@@ -5891,7 +5997,9 @@ function mtActualizarFooter(){
   var sub=mtEquipos.concat(mtAccItems).concat(mtOtros).reduce(function(s,it){
     var mk=(it.marca||'').toUpperCase()||'VARIOS';
     var mg=(cfg&&cfg.margenes&&cfg.margenes[mk])||0.8;
-    var cu=(it.precio||0)*(1-(it.dto||0)/100);
+    var cuEq=(it.precio||0)*(1-(it.dto||0)/100);
+    var cuSub=(it.subitems||[]).reduce(function(ss,si){return ss+(si.precio||0)*(si.cant||1);},0);
+    var cu=cuEq+cuSub;
     return s+(mg>0?cu/mg:cu)*(it.cant||1);
   },0);
   var iva=sub*0.19, tot=sub+iva;
@@ -6039,31 +6147,7 @@ function mtAddAccDirecto(ref){
 }
 
 // ── Preview ──
-function mtActualizarPreview(){
-  var d=recolectarMT();
-  var fecha=d.p_fecha?new Date(d.p_fecha+'T12:00:00').toLocaleDateString('es-CO',{year:'numeric',month:'long',day:'numeric'}):'[FECHA]';
-  var h='<strong>Bogotá, '+fecha+'</strong><br><br>';
-  h+='<strong>'+(d.p_cliente||'[CLIENTE]')+'</strong><br>'+(d.p_contacto||'')+'<br><br>';
-  h+='<strong>Oferta:</strong> '+(d.p_num||'')+(d.p_act?' ACT '+d.p_act:'')+'<br><br>';
-  h+='<strong>1. ALCANCE TÉCNICO - COMERCIAL</strong><br><br>';
-  var sub=0,num=0;
-  mtEquipos.forEach(function(it){
-    var t=(it.precio||0)*(it.cant||1)*(1-(it.dto||0)/100);sub+=t;num++;
-    h+=num+'. '+it.desc+' ('+it.cant+' und.) — '+fmtCOP(t)+'<br>';
-  });
-  mtAccItems.forEach(function(it){
-    var t=(it.precio||0)*(it.cant||1);sub+=t;num++;
-    h+=num+'. '+it.desc+' ('+it.cant+') — '+fmtCOP(t)+'<br>';
-  });
-  mtOtros.forEach(function(it){
-    var t=(it.precio||0)*(it.cant||1);sub+=t;num++;
-    h+=num+'. '+(it.desc||'Ítem')+' ('+it.cant+') — '+fmtCOP(t)+'<br>';
-  });
-  h+='<br><strong>SUBTOTAL: '+fmtCOP(sub)+'</strong><br>IVA 19%: '+fmtCOP(sub*0.19)+'<br><strong>TOTAL: '+fmtCOP(sub*1.19)+'</strong>';
-  var box=document.getElementById('mt-preview-box'); if(box)box.innerHTML=h;
-}
 
-// ── Init ──
 function mtInitModulo(){
   // Cargar listas del localStorage (persisten entre sesiones)
   if(typeof cargarMtListas==='function'){
