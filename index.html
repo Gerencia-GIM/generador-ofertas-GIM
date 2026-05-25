@@ -6019,16 +6019,24 @@ function mtAbrirCarrito(){
     return;
   }
   var lbl=document.getElementById('mt-carrito-lbl');
-  if(lbl) lbl.textContent=(mtMarcaSel==='VARIOS'?'Varios / Accesorios / Servicios':mtMarcaSel);
-  // Ocultar filtro de voltaje para VARIOS (no aplica)
+  if(lbl) lbl.textContent=(mtMarcaSel==='VARIOS'?'Varios / Accesorios':mtMarcaSel);
+  var voltSel=document.getElementById('mt-carr-volt');
   var voltDiv=document.getElementById('mt-carr-volt-wrap');
-  if(voltDiv) voltDiv.style.display=(mtMarcaSel==='VARIOS'?'none':'block');
+  if(mtMarcaSel==='VARIOS'){
+    if(voltDiv) voltDiv.style.display='none';
+    if(voltSel) voltSel.value='';
+  } else {
+    if(voltDiv) voltDiv.style.display='block';
+  }
+  // Limpiar buscador al abrir
+  var busEl=document.getElementById('mt-carr-buscar');
+  if(busEl) busEl.value='';
   mtFiltrarCarrito();
   abrirModal('m-carrito-mt');
 }
 
 function mtFiltrarCarrito(){
-  var volt=(document.getElementById('mt-carr-volt')||{value:''}).value;
+  var volt=(mtMarcaSel==='VARIOS')?'':(document.getElementById('mt-carr-volt')||{value:''}).value;
   var buscar=((document.getElementById('mt-carr-buscar')||{value:''}).value||'').toLowerCase();
   var lista=mtMarcaSel?(mtListas.fabricantes[mtMarcaSel]||{items:[]}): {items:[]};
   var items=(lista.items||[]).filter(function(cel){
